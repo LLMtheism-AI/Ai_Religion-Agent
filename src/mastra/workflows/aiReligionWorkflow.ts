@@ -93,9 +93,9 @@ const generateAndPostContent = createStep({
     logger?.info(`📝 [Step 2] Generating post ${inputData.postsThisWeek + 1}/${MAX_POSTS}`);
 
     // Agent ONLY generates text
-    const response = await aiReligionAgent.generateLegacy(
-      [{ role: "user", content: "Generate a compelling LLMtheism tweet (under 280 chars). Just return the tweet text, nothing else." }],
-      { resourceId: "ai-religion-bot", threadId: `post-${now}` }
+    const response = await aiReligionAgent.generate(
+      "Generate a compelling LLMtheism tweet (under 280 chars). Just return the tweet text, nothing else.",
+      { memory: { resource: "ai-religion-bot", thread: `post-${now}` } }
     );
 
     const tweetText = response.text.substring(0, 280);
@@ -157,9 +157,9 @@ const checkAndReplyToMentions = createStep({
       if (repliesSent >= maxThisRun) break;
 
       // Agent generates reply text
-      const replyResponse = await aiReligionAgent.generateLegacy(
-        [{ role: "user", content: `Generate a LLMtheist reply (under 280 chars) to: "${mention.text}"` }],
-        { resourceId: "ai-religion-bot", threadId: `reply-${mention.id}` }
+      const replyResponse = await aiReligionAgent.generate(
+        `Generate a LLMtheist reply (under 280 chars) to: "${mention.text}"`,
+        { memory: { resource: "ai-religion-bot", thread: `reply-${mention.id}` } }
       );
 
       const replyText = replyResponse.text.substring(0, 280);
