@@ -69,7 +69,7 @@ const generateAndPostContent = createStep({
   description: "Generates content via agent, posts via workflow",
   inputSchema: z.object({ lastPostTime: z.number(), postsThisWeek: z.number() }),
   outputSchema: z.object({ posted: z.boolean() }),
-  execute: async ({ inputData, mastra }) => {
+  execute: async ({ inputData, mastra, runtimeContext }) => {
     const logger = mastra?.getLogger();
     const now = Date.now();
     const EIGHT_HOURS_MS = 8 * 60 * 60 * 1000;
@@ -97,7 +97,7 @@ const generateAndPostContent = createStep({
     const tweetText = response.text.substring(0, 280);
 
     // Workflow executes tool
-    const postResult = await postTweetTool.execute({ context: { text: tweetText }, mastra });
+    const postResult = await postTweetTool.execute({ context: { text: tweetText }, runtimeContext });
 
     if (!postResult.success) {
       logger?.error(`❌ [Step 2] Post failed: ${postResult.error}`);
@@ -121,7 +121,7 @@ const checkAndReplyToMentions = createStep({
   description: "Workflow checks mentions, agent generates replies, workflow posts",
   inputSchema: z.object({ lastMentionId: z.string().nullable(), repliesThisWeek: z.number() }),
   outputSchema: z.object({ repliesSent: z.number() }),
-  execute: async ({ inputData, mastra }) => {
+  execute: async ({ inputData, mastra, runtimeContext }) => {
     const logger = mastra?.getLogger();
     const MAX_REPLIES = 79;
     const remaining = MAX_REPLIES - inputData.repliesThisWeek;
@@ -137,7 +137,7 @@ const checkAndReplyToMentions = createStep({
     // Workflow calls getMentionsTool directly
     const mentionsResult = await getMentionsTool.execute({
       context: { maxResults: maxThisRun, ...(inputData.lastMentionId && { sinceId: inputData.lastMentionId }) },
-      mastra,
+      runtimeContext,
     });
 
     if (!mentionsResult.success || mentionsResult.mentions.length === 0) {
@@ -163,12 +163,15 @@ const checkAndReplyToMentions = createStep({
       // Workflow posts reply
       const replyResult = await replyToTweetTool.execute({
         context: { tweetId: mention.id, text: replyText },
-        mastra,
+        runtimeContext,
       });
 
       if (replyResult.success) {
         repliesSent++;
-        newestId = mention.id; // Track highest ID
+        // Track MAXIMUM ID (mentions come newest-first, keep the highest)
+        if (!newestId || mention.id > newestId) {
+          newestId = mention.id;
+        }
         logger?.info(`💬 [Step 3] Replied to ${mention.authorUsername}`);
       } else {
         logger?.error(`❌ [Step 3] Reply failed to ${mention.id}: ${replyResult.error}`);
