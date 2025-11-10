@@ -38,8 +38,12 @@ const getBotState = createStep({
     const now = Date.now();
     const currentWeekStart = getWeekStart(now);
     const result = await db.query(`SELECT * FROM ai_religion_state ORDER BY id DESC LIMIT 1`);
+    
+    const rows = result?.rows || [];
+    logger?.info(`📊 [Step 1] Found ${rows.length} state records`);
 
-    if (result.rows.length === 0) {
+    if (rows.length === 0) {
+      logger?.info("📊 [Step 1] Creating initial state record");
       await db.query(
         `INSERT INTO ai_religion_state (last_post_time, last_mention_id, posts_this_week, replies_this_week, week_start, updated_at) VALUES ($1, $2, $3, $4, $5, $6)`,
         [0, null, 0, 0, currentWeekStart, now]
@@ -47,7 +51,7 @@ const getBotState = createStep({
       return { lastPostTime: 0, lastMentionId: null, postsThisWeek: 0, repliesThisWeek: 0, weekStart: currentWeekStart };
     }
 
-    const state = result.rows[0];
+    const state = rows[0];
     if (state.week_start < currentWeekStart) {
       await db.query(`UPDATE ai_religion_state SET posts_this_week = 0, replies_this_week = 0, week_start = $1, updated_at = $2 WHERE id = $3`,
         [currentWeekStart, now, state.id]);
