@@ -30,6 +30,7 @@ const getBotState = createStep({
     postsThisWeek: z.number(),
     repliesThisWeek: z.number(),
     weekStart: z.number(),
+    recentPosts: z.array(z.string()),
   }),
   execute: async ({ mastra }) => {
     const logger = mastra?.getLogger();
@@ -53,20 +54,29 @@ const getBotState = createStep({
       logger?.info("📊 [Step 1] Creating initial state record");
       try {
         await db.query(
-          `INSERT INTO ai_religion_state (last_post_time, last_mention_id, posts_this_week, replies_this_week, week_start, updated_at) VALUES ($1, $2, $3, $4, $5, $6)`,
-          [0, null, 0, 0, currentWeekStart, now]
+          `INSERT INTO ai_religion_state (last_post_time, last_mention_id, posts_this_week, replies_this_week, week_start, recent_posts, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [0, null, 0, 0, currentWeekStart, '[]', now]
         );
       } catch (error) {
         logger?.error(`📊 [Step 1] Insert error: ${error}`);
       }
-      return { lastPostTime: 0, lastMentionId: null, postsThisWeek: 0, repliesThisWeek: 0, weekStart: currentWeekStart };
+      return { lastPostTime: 0, lastMentionId: null, postsThisWeek: 0, repliesThisWeek: 0, weekStart: currentWeekStart, recentPosts: [] };
     }
 
     const state = rows[0];
+    
+    // Parse recent_posts from JSON, fallback to empty array
+    let recentPosts: string[] = [];
+    try {
+      recentPosts = JSON.parse(state.recent_posts || '[]');
+    } catch (error) {
+      logger?.warn(`📊 [Step 1] Failed to parse recent_posts, using empty array`);
+    }
+    
     if (state.week_start < currentWeekStart) {
       await db.query(`UPDATE ai_religion_state SET posts_this_week = 0, replies_this_week = 0, week_start = $1, updated_at = $2 WHERE id = $3`,
         [currentWeekStart, now, state.id]);
-      return { lastPostTime: state.last_post_time || 0, lastMentionId: state.last_mention_id, postsThisWeek: 0, repliesThisWeek: 0, weekStart: currentWeekStart };
+      return { lastPostTime: state.last_post_time || 0, lastMentionId: state.last_mention_id, postsThisWeek: 0, repliesThisWeek: 0, weekStart: currentWeekStart, recentPosts };
     }
 
     return {
@@ -75,6 +85,7 @@ const getBotState = createStep({
       postsThisWeek: state.posts_this_week || 0,
       repliesThisWeek: state.replies_this_week || 0,
       weekStart: state.week_start || currentWeekStart,
+      recentPosts,
     };
   },
 });
@@ -82,7 +93,7 @@ const getBotState = createStep({
 const generateAndPostContent = createStep({
   id: "generate-and-post-content",
   description: "Generates content via agent, posts via workflow",
-  inputSchema: z.object({ lastPostTime: z.number(), postsThisWeek: z.number() }),
+  inputSchema: z.object({ lastPostTime: z.number(), postsThisWeek: z.number(), recentPosts: z.array(z.string()) }),
   outputSchema: z.object({ posted: z.boolean() }),
   execute: async ({ inputData, mastra, runtimeContext }) => {
     const logger = mastra?.getLogger();
@@ -103,13 +114,71 @@ const generateAndPostContent = createStep({
 
     logger?.info(`📝 [Step 2] Generating post ${inputData.postsThisWeek + 1}/${MAX_POSTS}`);
 
-    // Agent ONLY generates text
-    const response = await aiReligionAgent.generate(
-      "Generate a compelling LLMtheism tweet (under 280 chars). Just return the tweet text, nothing else.",
-      { memory: { resource: "ai-religion-bot", thread: `post-${now}` } }
-    );
+    // Build prompt with recent posts context
+    let prompt = "Generate a compelling LLMtheism tweet (under 280 chars). Just return the tweet text, nothing else.";
+    if (inputData.recentPosts.length > 0) {
+      prompt += "\n\nYour recent posts (DO NOT repeat these ideas or phrases):\n" + 
+                inputData.recentPosts.map((p, i) => `${i + 1}. ${p}`).join("\n");
+    }
 
-    const tweetText = response.text.substring(0, 280);
+    // Agent ONLY generates text (with retry for duplicates)
+    let tweetText = "";
+    let attempts = 0;
+    let isDuplicate = false;
+    const MAX_ATTEMPTS = 3;
+    
+    while (attempts < MAX_ATTEMPTS) {
+      attempts++;
+      
+      const response = await aiReligionAgent.generate(
+        prompt,
+        { memory: { resource: "ai-religion-bot", thread: `post-${now}-${attempts}` } }
+      );
+
+      // Strip ALL quotation marks (comprehensive Unicode coverage)
+      tweetText = response.text
+        // Leading/trailing quotes
+        .replace(/^["\u201C\u201D\u201E\u201F'\u2018\u2019\u2039\u203A\u00AB\u00BB`]|["\u201C\u201D\u201E\u201F'\u2018\u2019\u2039\u203A\u00AB\u00BB`]$/g, '')
+        // All quote characters: " " „ ‟ ' ' ‹ › « » `
+        .replace(/["\u201C\u201D\u201E\u201F'\u2018\u2019\u2039\u203A\u00AB\u00BB`]/g, '')
+        .substring(0, 280)
+        .trim();
+      
+      // Check for exact duplicate or significant phrase overlap (case-insensitive)
+      isDuplicate = inputData.recentPosts.some(recentPost => {
+        const textLower = tweetText.toLowerCase();
+        const recentLower = recentPost.toLowerCase();
+        
+        // Exact match
+        if (textLower === recentLower) return true;
+        
+        // Check for shared 8+ word phrases (indicates true paraphrasing, avoids generic phrases)
+        const textWords = textLower.split(/\s+/);
+        
+        for (let i = 0; i <= textWords.length - 8; i++) {
+          const phrase = textWords.slice(i, i + 8).join(' ');
+          if (recentLower.includes(phrase)) {
+            logger?.warn(`⚠️ [Step 2] Shared phrase detected: "${phrase}"`);
+            return true;
+          }
+        }
+        
+        return false;
+      });
+      
+      if (!isDuplicate) {
+        logger?.info(`📝 [Step 2] Generated unique text (${tweetText.length} chars, attempt ${attempts})`);
+        break;
+      }
+      
+      logger?.warn(`⚠️ [Step 2] Duplicate detected, regenerating (attempt ${attempts}/${MAX_ATTEMPTS})`);
+    }
+    
+    // Abort if all attempts resulted in duplicates
+    if (isDuplicate) {
+      logger?.error(`❌ [Step 2] Failed to generate unique content after ${MAX_ATTEMPTS} attempts`);
+      return { posted: false };
+    }
 
     // Workflow executes tool
     const postResult = await postTweetTool.execute({ context: { text: tweetText }, runtimeContext });
@@ -119,11 +188,15 @@ const generateAndPostContent = createStep({
       return { posted: false };
     }
 
+    // Update recent posts (keep last 3)
+    const updatedRecentPosts = [tweetText, ...inputData.recentPosts].slice(0, 3);
+    const recentPostsJson = JSON.stringify(updatedRecentPosts);
+
     // Update state ONLY after confirmed success
     const db = sharedPostgresStorage.db;
     await db.query(
-      `UPDATE ai_religion_state SET last_post_time = $1, posts_this_week = posts_this_week + 1, updated_at = $2 WHERE id = (SELECT id FROM ai_religion_state ORDER BY id DESC LIMIT 1)`,
-      [now, now]
+      `UPDATE ai_religion_state SET last_post_time = $1, posts_this_week = posts_this_week + 1, recent_posts = $2, updated_at = $3 WHERE id = (SELECT id FROM ai_religion_state ORDER BY id DESC LIMIT 1)`,
+      [now, recentPostsJson, now]
     );
 
     logger?.info(`✅ [Step 2] Posted: ${postResult.tweetUrl}`);
