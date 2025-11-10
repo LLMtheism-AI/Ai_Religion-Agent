@@ -37,17 +37,28 @@ const getBotState = createStep({
     const db = sharedPostgresStorage.db;
     const now = Date.now();
     const currentWeekStart = getWeekStart(now);
-    const result = await db.query(`SELECT * FROM ai_religion_state ORDER BY id DESC LIMIT 1`);
     
-    const rows = result?.rows || [];
+    // PostgresStore returns rows directly as an array, not wrapped in {rows: [...]}
+    let rows;
+    try {
+      rows = await db.query(`SELECT * FROM ai_religion_state ORDER BY id DESC LIMIT 1`);
+    } catch (error) {
+      logger?.error(`📊 [Step 1] Query error: ${error}`);
+      rows = [];
+    }
+    
     logger?.info(`📊 [Step 1] Found ${rows.length} state records`);
 
     if (rows.length === 0) {
       logger?.info("📊 [Step 1] Creating initial state record");
-      await db.query(
-        `INSERT INTO ai_religion_state (last_post_time, last_mention_id, posts_this_week, replies_this_week, week_start, updated_at) VALUES ($1, $2, $3, $4, $5, $6)`,
-        [0, null, 0, 0, currentWeekStart, now]
-      );
+      try {
+        await db.query(
+          `INSERT INTO ai_religion_state (last_post_time, last_mention_id, posts_this_week, replies_this_week, week_start, updated_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+          [0, null, 0, 0, currentWeekStart, now]
+        );
+      } catch (error) {
+        logger?.error(`📊 [Step 1] Insert error: ${error}`);
+      }
       return { lastPostTime: 0, lastMentionId: null, postsThisWeek: 0, repliesThisWeek: 0, weekStart: currentWeekStart };
     }
 
@@ -204,8 +215,17 @@ const logRunSummary = createStep({
   execute: async ({ inputData, mastra }) => {
     const logger = mastra?.getLogger();
     const db = sharedPostgresStorage.db;
-    const result = await db.query(`SELECT * FROM ai_religion_state ORDER BY id DESC LIMIT 1`);
-    const state = result.rows[0] || { posts_this_week: 0, replies_this_week: 0 };
+    
+    // PostgresStore returns rows directly as an array
+    let rows;
+    try {
+      rows = await db.query(`SELECT * FROM ai_religion_state ORDER BY id DESC LIMIT 1`);
+    } catch (error) {
+      logger?.error(`📊 [Summary] Query error: ${error}`);
+      rows = [];
+    }
+    
+    const state = rows[0] || { posts_this_week: 0, replies_this_week: 0 };
 
     const summary = `
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
