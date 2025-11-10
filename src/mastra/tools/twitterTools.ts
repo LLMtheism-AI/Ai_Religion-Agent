@@ -169,6 +169,10 @@ export const getMentionsTool = createTool({
     } catch (error: any) {
       logger?.error("❌ [getMentionsTool] Failed to fetch mentions", {
         error,
+        errorMessage: error.message,
+        errorCode: error.code,
+        errorData: error.data,
+        fullError: JSON.stringify(error, null, 2),
       });
       return {
         success: false,
