@@ -8,9 +8,9 @@ import { NonRetriableError } from "inngest";
 import { z } from "zod";
 
 import { sharedPostgresStorage } from "./storage";
-import { inngest, inngestServe } from "./inngest";
-import { exampleWorkflow } from "./workflows/exampleWorkflow"; // Replace with your own workflow
-import { exampleAgent } from "./agents/exampleAgent"; // Replace with your own agent
+import { inngest, inngestServe, registerCronWorkflow } from "./inngest";
+import { aiReligionWorkflow } from "./workflows/aiReligionWorkflow";
+import { aiReligionAgent } from "./agents/aiReligionAgent";
 
 class ProductionPinoLogger extends MastraLogger {
   protected logger: pino.Logger;
@@ -56,9 +56,9 @@ class ProductionPinoLogger extends MastraLogger {
 export const mastra = new Mastra({
   storage: sharedPostgresStorage,
   // Register your workflows here
-  workflows: {},
+  workflows: { aiReligionWorkflow },
   // Register your agents here
-  agents: {},
+  agents: { aiReligionAgent },
   mcpServers: {
     allTools: new MCPServer({
       name: "allTools",
@@ -237,3 +237,9 @@ if (Object.keys(mastra.getAgents()).length > 1) {
     "More than 1 agents found. Currently, more than 1 agents are not supported in the UI, since doing so will cause app state to be inconsistent.",
   );
 }
+
+/**
+ * Register cron trigger for AI Religion workflow
+ * Runs every 15 minutes to check mentions and post every 8 hours
+ */
+registerCronWorkflow("*/15 * * * *", aiReligionWorkflow);
