@@ -129,6 +129,11 @@ export const getMentionsTool = createTool({
       const mentionsList = [];
       let newestId: string | undefined;
 
+      logger?.info("📡 [getMentionsTool] Raw API response metadata", {
+        meta: mentions.meta,
+        resultCount: mentions.meta?.result_count || 0,
+      });
+
       // Process mentions
       for await (const tweet of mentions) {
         // Skip our own tweets
@@ -156,6 +161,7 @@ export const getMentionsTool = createTool({
       logger?.info("✅ [getMentionsTool] Mentions fetched successfully", {
         count: mentionsList.length,
         newestId,
+        myUsername: me.data.username,
       });
 
       return {

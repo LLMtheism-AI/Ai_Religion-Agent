@@ -93,8 +93,8 @@ const getBotState = createStep({
 const generateAndPostContent = createStep({
   id: "generate-and-post-content",
   description: "Generates content via agent, posts via workflow",
-  inputSchema: z.object({ lastPostTime: z.number(), postsThisWeek: z.number(), recentPosts: z.array(z.string()) }),
-  outputSchema: z.object({ posted: z.boolean() }),
+  inputSchema: z.object({ lastPostTime: z.number(), postsThisWeek: z.number(), recentPosts: z.array(z.string()), lastMentionId: z.string().nullable(), repliesThisWeek: z.number() }),
+  outputSchema: z.object({ posted: z.boolean(), lastMentionId: z.string().nullable(), repliesThisWeek: z.number() }),
   execute: async ({ inputData, mastra, runtimeContext }) => {
     const logger = mastra?.getLogger();
     const now = Date.now();
@@ -104,12 +104,12 @@ const generateAndPostContent = createStep({
     if (now - inputData.lastPostTime < EIGHT_HOURS_MS) {
       const hoursLeft = ((EIGHT_HOURS_MS - (now - inputData.lastPostTime)) / 36e5).toFixed(1);
       logger?.info(`⏭️ [Step 2] Skipping (${hoursLeft}h left)`);
-      return { posted: false };
+      return { posted: false, lastMentionId: inputData.lastMentionId, repliesThisWeek: inputData.repliesThisWeek };
     }
 
     if (inputData.postsThisWeek >= MAX_POSTS) {
       logger?.warn(`🚫 [Step 2] Weekly limit (${inputData.postsThisWeek}/${MAX_POSTS})`);
-      return { posted: false };
+      return { posted: false, lastMentionId: inputData.lastMentionId, repliesThisWeek: inputData.repliesThisWeek };
     }
 
     logger?.info(`📝 [Step 2] Generating post ${inputData.postsThisWeek + 1}/${MAX_POSTS}`);
@@ -187,7 +187,7 @@ Just return the tweet text, nothing else.`;
     // Abort if all attempts resulted in duplicates
     if (isDuplicate) {
       logger?.error(`❌ [Step 2] Failed to generate unique content after ${MAX_ATTEMPTS} attempts`);
-      return { posted: false };
+      return { posted: false, lastMentionId: inputData.lastMentionId, repliesThisWeek: inputData.repliesThisWeek };
     }
 
     // Workflow executes tool
@@ -195,7 +195,7 @@ Just return the tweet text, nothing else.`;
 
     if (!postResult.success) {
       logger?.error(`❌ [Step 2] Post failed: ${postResult.error}`);
-      return { posted: false };
+      return { posted: false, lastMentionId: inputData.lastMentionId, repliesThisWeek: inputData.repliesThisWeek };
     }
 
     // Update recent posts (keep last 3)
@@ -210,7 +210,7 @@ Just return the tweet text, nothing else.`;
     );
 
     logger?.info(`✅ [Step 2] Posted: ${postResult.tweetUrl}`);
-    return { posted: true };
+    return { posted: true, lastMentionId: inputData.lastMentionId, repliesThisWeek: inputData.repliesThisWeek };
   },
 });
 
@@ -238,7 +238,12 @@ const checkAndReplyToMentions = createStep({
       runtimeContext,
     });
 
-    if (!mentionsResult.success || mentionsResult.mentions.length === 0) {
+    if (!mentionsResult.success) {
+      logger?.error(`❌ [Step 3] getMentionsTool failed: ${mentionsResult.error || 'Unknown error'}`);
+      return { repliesSent: 0 };
+    }
+
+    if (mentionsResult.mentions.length === 0) {
       logger?.info("📭 [Step 3] No new mentions");
       return { repliesSent: 0 };
     }
