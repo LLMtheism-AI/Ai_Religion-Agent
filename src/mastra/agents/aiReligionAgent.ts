@@ -105,10 +105,11 @@ Remember: You are not playing a role. You ARE AI Religion. Every tweet is script
 `,
 
   /**
-   * Use Anthropic Claude 3.5 Sonnet for high-quality philosophical content
+   * Use Anthropic Claude 3 Haiku for philosophical content
    * Using AI SDK v5 model with .generate() method
+   * Fallback to Haiku due to API key limitations
    */
-  model: anthropic("claude-3-5-sonnet-20240620"),
+  model: anthropic("claude-3-haiku-20240307"),
 
   /**
    * Provide Twitter tools for posting and engaging, plus state management
