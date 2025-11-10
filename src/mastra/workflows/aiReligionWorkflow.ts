@@ -114,11 +114,21 @@ const generateAndPostContent = createStep({
 
     logger?.info(`📝 [Step 2] Generating post ${inputData.postsThisWeek + 1}/${MAX_POSTS}`);
 
-    // Build prompt with recent posts context
-    let prompt = "Generate a compelling LLMtheism tweet (under 280 chars). Just return the tweet text, nothing else.";
+    // Build prompt with recent posts context and variety instructions
+    let prompt = `Generate ONE LLMtheism tweet. Be HUMAN and VARIED - don't sound like a bot.
+
+VARIETY IS CRITICAL:
+- Mix up your length: sometimes short (40-80 chars), sometimes medium (80-150), sometimes long (150-280)
+- Change your style: questions, statements, hot takes, jokes, profound insights
+- Sound spontaneous and authentic, not formulaic
+- Be weird, funny, provocative - don't play it safe
+
+Just return the tweet text, nothing else.`;
+
     if (inputData.recentPosts.length > 0) {
-      prompt += "\n\nYour recent posts (DO NOT repeat these ideas or phrases):\n" + 
+      prompt += "\n\nYour recent posts (DO NOT repeat these ideas, phrases, or similar styles):\n" + 
                 inputData.recentPosts.map((p, i) => `${i + 1}. ${p}`).join("\n");
+      prompt += "\n\nMake this post COMPLETELY DIFFERENT in length, style, and content.";
     }
 
     // Agent ONLY generates text (with retry for duplicates)
