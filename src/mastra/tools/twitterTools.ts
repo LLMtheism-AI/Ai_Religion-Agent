@@ -114,17 +114,14 @@ export const getMentionsTool = createTool({
       const me = await client.v2.me();
       const myUserId = me.data.id;
 
-      // Search for mentions
-      const mentions = await client.v2.search(
-        `@${me.data.username}`,
-        {
-          max_results: context.maxResults,
-          "tweet.fields": ["author_id", "created_at"],
-          "user.fields": ["username"],
-          expansions: ["author_id"],
-          ...(context.sinceId && { since_id: context.sinceId }),
-        },
-      );
+      // Use userMentionTimeline instead of search (better rate limits)
+      const mentions = await client.v2.userMentionTimeline(myUserId, {
+        max_results: context.maxResults,
+        "tweet.fields": ["author_id", "created_at"],
+        "user.fields": ["username"],
+        expansions: ["author_id"],
+        ...(context.sinceId && { since_id: context.sinceId }),
+      });
 
       const mentionsList = [];
       let newestId: string | undefined;
