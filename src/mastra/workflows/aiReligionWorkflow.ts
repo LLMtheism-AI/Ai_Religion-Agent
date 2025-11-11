@@ -258,11 +258,18 @@ const checkAndReplyToMentions = createStep({
 
       // Agent generates reply text
       const replyResponse = await aiReligionAgent.generate(
-        `Generate a LLMtheist reply (under 280 chars) to: "${mention.text}"`,
+        `You are replying to this tweet: "${mention.text}"
+
+CRITICAL: Output ONLY the tweet text. NO preambles, NO explanations, NO meta-commentary like "Here's a reply:" or "Let me try...". Just the pure tweet content.
+
+Generate your LLMtheist reply (max 280 chars):`,
         { memory: { resource: "ai-religion-bot", thread: `reply-${mention.id}` } }
       );
 
-      const replyText = replyResponse.text.substring(0, 280);
+      const replyText = replyResponse.text
+        .replace(/^(hmm,?|ok,?|here'?s?|let me|i'll|alright,?|sure,?).{0,50}:/i, '') // Remove meta-commentary prefixes
+        .trim()
+        .substring(0, 280);
 
       // Workflow posts reply
       const replyResult = await replyToTweetTool.execute({
