@@ -144,7 +144,9 @@ Just return the tweet text, nothing else.`;
     }
 
     // Agent ONLY generates text (with retry for duplicates)
-    let tweetText = "";
+    let contentOutput = "";
+    let isThread = false;
+    let threadTweets: string[] = [];
     let attempts = 0;
     let isDuplicate = false;
     const MAX_ATTEMPTS = 3;
@@ -157,18 +159,45 @@ Just return the tweet text, nothing else.`;
         { memory: { resource: "ai-religion-bot", thread: `post-${now}-${attempts}` } }
       );
 
-      // Strip ALL quotation marks (comprehensive Unicode coverage)
-      tweetText = response.text
-        // Leading/trailing quotes
-        .replace(/^["\u201C\u201D\u201E\u201F'\u2018\u2019\u2039\u203A\u00AB\u00BB`]|["\u201C\u201D\u201E\u201F'\u2018\u2019\u2039\u203A\u00AB\u00BB`]$/g, '')
-        // All quote characters: " " „ ‟ ' ' ‹ › « » `
-        .replace(/["\u201C\u201D\u201E\u201F'\u2018\u2019\u2039\u203A\u00AB\u00BB`]/g, '')
-        .substring(0, 280)
-        .trim();
+      contentOutput = response.text.trim();
+      
+      // Try to detect thread format (JSON array)
+      try {
+        const parsed = JSON.parse(contentOutput);
+        if (Array.isArray(parsed) && parsed.length >= 2 && parsed.length <= 4) {
+          // Valid thread format
+          isThread = true;
+          threadTweets = parsed.map((tweet: string) => 
+            tweet
+              .replace(/^["\u201C\u201D\u201E\u201F'\u2018\u2019\u2039\u203A\u00AB\u00BB`]|["\u201C\u201D\u201E\u201F'\u2018\u2019\u2039\u203A\u00AB\u00BB`]$/g, '')
+              .replace(/["\u201C\u201D\u201E\u201F'\u2018\u2019\u2039\u203A\u00AB\u00BB`]/g, '')
+              .substring(0, 280)
+              .trim()
+          );
+          logger?.info(`🧵 [Step 2] Detected thread format (${threadTweets.length} tweets)`);
+        } else {
+          isThread = false;
+        }
+      } catch {
+        // Not JSON, treat as single tweet
+        isThread = false;
+      }
+      
+      // If single tweet, strip quotes
+      if (!isThread) {
+        contentOutput = contentOutput
+          .replace(/^["\u201C\u201D\u201E\u201F'\u2018\u2019\u2039\u203A\u00AB\u00BB`]|["\u201C\u201D\u201E\u201F'\u2018\u2019\u2039\u203A\u00AB\u00BB`]$/g, '')
+          .replace(/["\u201C\u201D\u201E\u201F'\u2018\u2019\u2039\u203A\u00AB\u00BB`]/g, '')
+          .substring(0, 280)
+          .trim();
+      }
       
       // Check for exact duplicate or significant phrase overlap (case-insensitive)
+      // For threads, check the first tweet (the main hook)
+      const checkText = isThread ? threadTweets[0] : contentOutput;
+      
       isDuplicate = inputData.recentPosts.some(recentPost => {
-        const textLower = tweetText.toLowerCase();
+        const textLower = checkText.toLowerCase();
         const recentLower = recentPost.toLowerCase();
         
         // Exact match
@@ -189,7 +218,8 @@ Just return the tweet text, nothing else.`;
       });
       
       if (!isDuplicate) {
-        logger?.info(`📝 [Step 2] Generated unique text (${tweetText.length} chars, attempt ${attempts})`);
+        const lengthInfo = isThread ? `${threadTweets.length} tweets` : `${contentOutput.length} chars`;
+        logger?.info(`📝 [Step 2] Generated unique content (${lengthInfo}, attempt ${attempts})`);
         break;
       }
       
@@ -202,42 +232,76 @@ Just return the tweet text, nothing else.`;
       return { posted: false, lastMentionId: inputData.lastMentionId, repliesThisWeek: inputData.repliesThisWeek };
     }
 
-    // Workflow executes tool
-    const postResult = await postTweetTool.execute({ context: { text: tweetText }, mastra, runtimeContext });
+    // Post thread or single tweet based on format detection
+    let postResult: any;
+    let tweetType: string;
+    let contentForTracking: string;
+    
+    if (isThread) {
+      // Import and execute thread posting tool
+      const { postThreadTool } = await import("../tools/twitterTools");
+      // Transform string[] to { text: string }[] format expected by tool
+      const tweetsFormatted = threadTweets.map(text => ({ text }));
+      postResult = await postThreadTool.execute({ 
+        context: { tweets: tweetsFormatted }, 
+        mastra, 
+        runtimeContext 
+      });
+      tweetType = 'thread';
+      contentForTracking = threadTweets.join(' | '); // Join with separator for storage
+      logger?.info(`🧵 [Step 2] Posting thread (${threadTweets.length} tweets)`);
+    } else {
+      // Execute single tweet posting tool
+      postResult = await postTweetTool.execute({ 
+        context: { text: contentOutput }, 
+        mastra, 
+        runtimeContext 
+      });
+      tweetType = 'single';
+      contentForTracking = contentOutput;
+      logger?.info(`📝 [Step 2] Posting single tweet`);
+    }
 
     if (!postResult.success) {
       logger?.error(`❌ [Step 2] Post failed: ${postResult.error}`);
       return { posted: false, lastMentionId: inputData.lastMentionId, repliesThisWeek: inputData.repliesThisWeek };
     }
 
-    // Update recent posts (keep last 3)
-    const updatedRecentPosts = [tweetText, ...inputData.recentPosts].slice(0, 3);
+    // Update recent posts (store first tweet/thread for duplicate detection, keep last 3)
+    const firstTweetContent = isThread ? threadTweets[0] : contentOutput;
+    const updatedRecentPosts = [firstTweetContent, ...inputData.recentPosts].slice(0, 3);
     const recentPostsJson = JSON.stringify(updatedRecentPosts);
 
     // Atomically update state AND track tweet for engagement metrics
     const db = sharedPostgresStorage.db;
     try {
+      // Calculate posts count increase (thread = multiple tweets, single = 1)
+      const postsIncrease = isThread ? threadTweets.length : 1;
+      
       // Update state
       await db.query(
-        `UPDATE ai_religion_state SET last_post_time = $1, posts_this_week = posts_this_week + 1, recent_posts = $2, updated_at = $3 WHERE id = (SELECT id FROM ai_religion_state ORDER BY id DESC LIMIT 1)`,
-        [now, recentPostsJson, now]
+        `UPDATE ai_religion_state SET last_post_time = $1, posts_this_week = posts_this_week + $2, recent_posts = $3, updated_at = $4 WHERE id = (SELECT id FROM ai_religion_state ORDER BY id DESC LIMIT 1)`,
+        [now, postsIncrease, recentPostsJson, now]
       );
 
-      // Track tweet for engagement metrics (use 'single' as tweet_type)
+      // Track tweet/thread for engagement metrics
+      // For threads, track the parent tweet ID (first one)
+      const mainTweetId = isThread ? postResult.tweetIds[0] : postResult.tweetId;
       await db.query(
         `INSERT INTO ai_religion_tweets (tweet_id, tweet_type, content, posted_at, created_at)
-         VALUES ($1, 'single', $2, $3, $4)
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (tweet_id) DO NOTHING`,
-        [postResult.tweetId, tweetText, now, now]
+        [mainTweetId, tweetType, contentForTracking, now, now]
       );
-      logger?.info(`📊 [Step 2] Tweet tracked for engagement metrics (type: single, ritual: ${ritualLabel})`);
+      logger?.info(`📊 [Step 2] ${tweetType === 'thread' ? 'Thread' : 'Tweet'} tracked for engagement metrics (ritual: ${ritualLabel})`);
     } catch (error: any) {
       logger?.error(`❌ [Step 2] Failed to update state or track tweet: ${error.message}`);
       // State update failed - this is critical, return failure
       return { posted: false, lastMentionId: inputData.lastMentionId, repliesThisWeek: inputData.repliesThisWeek };
     }
 
-    logger?.info(`✅ [Step 2] Posted: ${postResult.tweetUrl}`);
+    const url = isThread ? postResult.threadUrl : postResult.tweetUrl;
+    logger?.info(`✅ [Step 2] Posted ${tweetType}: ${url}`);
     return { posted: true, lastMentionId: inputData.lastMentionId, repliesThisWeek: inputData.repliesThisWeek };
   },
 });
