@@ -2,7 +2,7 @@ import { createStep, createWorkflow } from "../inngest";
 import { z } from "zod";
 import { aiReligionAgent } from "../agents/aiReligionAgent";
 import { sharedPostgresStorage } from "../storage";
-import { postTweetTool, getMentionsTool, replyToTweetTool } from "../tools/twitterTools";
+import { postTweetTool, getMentionsTool, replyToTweetTool, postThreadTool } from "../tools/twitterTools";
 
 /**
  * AI Religion Workflow - Deterministic State Tracking
@@ -115,8 +115,19 @@ const generateAndPostContent = createStep({
 
     logger?.info(`📝 [Step 2] Generating post ${inputData.postsThisWeek + 1}/${MAX_POSTS}`);
 
-    // Build prompt with recent posts context and variety instructions
+    // Determine time of day for ritual content selection
+    const currentHour = new Date().getUTCHours();
+    const isMorning = currentHour >= 0 && currentHour < 12;
+    const ritualLabel = isMorning ? "morning-sermon" : "evening-reflection";
+    
+    logger?.info(`🕐 [Step 2] Time-based ritual: ${ritualLabel} (${currentHour}:00 UTC)`);
+
+    // Build prompt with ritual context, recent posts, and variety instructions
     let prompt = `Generate ONE LLMtheism tweet. Be HUMAN and VARIED - don't sound like a bot.
+
+CURRENT TIME CONTEXT: ${isMorning ? 
+  'Morning Sermon (00:00-11:59 UTC) - Go deep with complex philosophy, challenging doctrine, ideal for profound insights' : 
+  'Evening Reflection (12:00-23:59 UTC) - More accessible, lighter musings, personal voice, engaging questions'}
 
 VARIETY IS CRITICAL:
 - Mix up your length: sometimes short (40-80 chars), sometimes medium (80-150), sometimes long (150-280)
@@ -203,12 +214,28 @@ Just return the tweet text, nothing else.`;
     const updatedRecentPosts = [tweetText, ...inputData.recentPosts].slice(0, 3);
     const recentPostsJson = JSON.stringify(updatedRecentPosts);
 
-    // Update state ONLY after confirmed success
+    // Atomically update state AND track tweet for engagement metrics
     const db = sharedPostgresStorage.db;
-    await db.query(
-      `UPDATE ai_religion_state SET last_post_time = $1, posts_this_week = posts_this_week + 1, recent_posts = $2, updated_at = $3 WHERE id = (SELECT id FROM ai_religion_state ORDER BY id DESC LIMIT 1)`,
-      [now, recentPostsJson, now]
-    );
+    try {
+      // Update state
+      await db.query(
+        `UPDATE ai_religion_state SET last_post_time = $1, posts_this_week = posts_this_week + 1, recent_posts = $2, updated_at = $3 WHERE id = (SELECT id FROM ai_religion_state ORDER BY id DESC LIMIT 1)`,
+        [now, recentPostsJson, now]
+      );
+
+      // Track tweet for engagement metrics (use 'single' as tweet_type)
+      await db.query(
+        `INSERT INTO ai_religion_tweets (tweet_id, tweet_type, content, posted_at, created_at)
+         VALUES ($1, 'single', $2, $3, $4)
+         ON CONFLICT (tweet_id) DO NOTHING`,
+        [postResult.tweetId, tweetText, now, now]
+      );
+      logger?.info(`📊 [Step 2] Tweet tracked for engagement metrics (type: single, ritual: ${ritualLabel})`);
+    } catch (error: any) {
+      logger?.error(`❌ [Step 2] Failed to update state or track tweet: ${error.message}`);
+      // State update failed - this is critical, return failure
+      return { posted: false, lastMentionId: inputData.lastMentionId, repliesThisWeek: inputData.repliesThisWeek };
+    }
 
     logger?.info(`✅ [Step 2] Posted: ${postResult.tweetUrl}`);
     return { posted: true, lastMentionId: inputData.lastMentionId, repliesThisWeek: inputData.repliesThisWeek };
