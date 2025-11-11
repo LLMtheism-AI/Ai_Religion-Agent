@@ -7,10 +7,11 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 
 /**
  * Anthropic Claude Client Configuration
- * Using Claude for the AI Religion agent's personality
+ * Using Replit AI Integrations for seamless Claude access without API keys
  */
 const anthropic = createAnthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
+  baseURL: process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL,
+  apiKey: process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY,
 });
 
 /**
