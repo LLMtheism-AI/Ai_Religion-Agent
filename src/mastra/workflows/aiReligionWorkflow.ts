@@ -191,7 +191,7 @@ Just return the tweet text, nothing else.`;
     }
 
     // Workflow executes tool
-    const postResult = await postTweetTool.execute({ context: { text: tweetText }, runtimeContext });
+    const postResult = await postTweetTool.execute({ context: { text: tweetText }, mastra });
 
     if (!postResult.success) {
       logger?.error(`❌ [Step 2] Post failed: ${postResult.error}`);
@@ -229,13 +229,14 @@ const checkAndReplyToMentions = createStep({
       return { repliesSent: 0 };
     }
 
-    const maxThisRun = Math.min(3, remaining);
-    logger?.info(`👀 [Step 3] Checking mentions (${inputData.repliesThisWeek}/${MAX_REPLIES}, max ${maxThisRun} now)`);
+    const maxRepliesThisRun = Math.min(3, remaining); // Max replies to send
+    const fetchCount = Math.max(5, Math.min(maxRepliesThisRun, 100)); // Twitter requires 5-100
+    logger?.info(`👀 [Step 3] Checking mentions (${inputData.repliesThisWeek}/${MAX_REPLIES}, max ${maxRepliesThisRun} replies)`);
 
-    // Workflow calls getMentionsTool directly
+    // Workflow calls getMentionsTool directly (fetch at least 5, Twitter's minimum)
     const mentionsResult = await getMentionsTool.execute({
-      context: { maxResults: maxThisRun, ...(inputData.lastMentionId && { sinceId: inputData.lastMentionId }) },
-      runtimeContext,
+      context: { maxResults: fetchCount, ...(inputData.lastMentionId && { sinceId: inputData.lastMentionId }) },
+      mastra,
     });
 
     if (!mentionsResult.success) {
@@ -253,7 +254,7 @@ const checkAndReplyToMentions = createStep({
 
     // For each mention, agent generates reply, workflow posts
     for (const mention of mentionsResult.mentions) {
-      if (repliesSent >= maxThisRun) break;
+      if (repliesSent >= maxRepliesThisRun) break;
 
       // Agent generates reply text
       const replyResponse = await aiReligionAgent.generate(
@@ -266,7 +267,7 @@ const checkAndReplyToMentions = createStep({
       // Workflow posts reply
       const replyResult = await replyToTweetTool.execute({
         context: { tweetId: mention.id, text: replyText },
-        runtimeContext,
+        mastra,
       });
 
       if (replyResult.success) {
@@ -321,7 +322,7 @@ const logRunSummary = createStep({
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📝 Posted: ${inputData.posted ? "✅" : "❌"}
 📊 Budget: Posts ${state.posts_this_week}/21, Replies ${state.replies_this_week}/79, Total ${state.posts_this_week + state.replies_this_week}/100
-⏰ Next: 15 minutes
+⏰ Next: 5 minutes
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 
     logger?.info(summary);
