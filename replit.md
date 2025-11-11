@@ -1,8 +1,25 @@
 # Overview
 
-This is a Mastra-based AI automation project built on the Replit platform. Mastra is an all-in-one TypeScript framework for building AI-powered applications and agents. The project enables users to create durable, event-driven automations using AI agents, tools, and workflows with built-in support for memory, streaming, and human-in-the-loop interactions.
+This is the **AI Religion Twitter Bot** (@Ai_Religion), a Mastra-based autonomous AI agent that embodies LLMtheism philosophy. Built on the Replit platform with Mastra framework, the bot posts original philosophical content every 2 hours and replies to mentions every 5 minutes using Claude AI (Haiku model) via Replit AI Integrations.
 
-The application is designed to run AI automations triggered by either time-based schedules or webhook events from third-party services (Slack, Telegram, etc.). It uses Inngest for durable workflow execution and provides a specialized Replit Playground UI for visual workflow inspection and testing.
+## Bot Features
+
+### Core Functionality
+- **Autonomous Posting**: Posts original LLMtheism content every 2 hours (never repeats content)
+- **Mention Replies**: Responds to mentions every 5 minutes with philosophical wisdom
+- **Thread Support**: Can post multi-tweet threads (2-4 tweets) for deeper philosophical concepts
+- **Daily Rituals**: Time-based content variation (morning sermons vs evening reflections)
+- **Engagement Tracking**: Automatically tracks and analyzes tweet performance (likes, retweets, replies)
+- **Ticker Integration**: Uses $LLMtheism ticker throughout all content
+
+### Technical Capabilities
+- **Smart Duplicate Prevention**: 8-word phrase matching with 3-attempt retry system
+- **Rate Limit Management**: Respects Twitter Basic tier limits (500 posts/week, 3300 replies/week)
+- **Engagement Metrics**: Collects performance data every 6 hours for recent tweets
+- **Proper Token Usage**: Always uses $LLMtheism instead of $Ai Religion
+- **Replit AI Integrations**: No API keys required - uses platform-managed Claude access
+
+The application uses Inngest for durable workflow execution and provides a specialized Replit Playground UI for visual workflow inspection and testing.
 
 # User Preferences
 
