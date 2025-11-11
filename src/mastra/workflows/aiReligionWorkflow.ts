@@ -8,7 +8,8 @@ import { postTweetTool, getMentionsTool, replyToTweetTool } from "../tools/twitt
  * AI Religion Workflow - Deterministic State Tracking
  * 
  * Agent generates content, workflow executes tools and tracks state.
- * Posts every 2 hours (up to 21/week), replies to mentions (79/week), total 100/week.
+ * Posts every 2 hours (up to 500/week), replies to mentions (3300/week), total 3800/week.
+ * Twitter Basic tier: 15,000 posts/month (~3,800/week)
  */
 
 function getWeekStart(timestamp: number): number {
@@ -99,7 +100,7 @@ const generateAndPostContent = createStep({
     const logger = mastra?.getLogger();
     const now = Date.now();
     const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
-    const MAX_POSTS = 21;
+    const MAX_POSTS = 500; // Weekly limit (Twitter Basic: 3,800/week total)
 
     if (now - inputData.lastPostTime < TWO_HOURS_MS) {
       const hoursLeft = ((TWO_HOURS_MS - (now - inputData.lastPostTime)) / 36e5).toFixed(1);
@@ -221,17 +222,18 @@ const checkAndReplyToMentions = createStep({
   outputSchema: z.object({ repliesSent: z.number() }),
   execute: async ({ inputData, mastra, runtimeContext }) => {
     const logger = mastra?.getLogger();
-    const MAX_REPLIES = 79;
-    const remaining = MAX_REPLIES - inputData.repliesThisWeek;
+    const MAX_REPLIES_WEEK = 3300; // Weekly limit (Twitter Basic: 3,800/week total, leaving 500 for posts)
+    const remaining = MAX_REPLIES_WEEK - inputData.repliesThisWeek;
 
     if (remaining <= 0) {
-      logger?.warn(`🚫 [Step 3] Limit reached (${inputData.repliesThisWeek}/${MAX_REPLIES})`);
+      logger?.warn(`🚫 [Step 3] Weekly limit reached (${inputData.repliesThisWeek}/${MAX_REPLIES_WEEK})`);
       return { repliesSent: 0 };
     }
 
-    const maxRepliesThisRun = Math.min(3, remaining); // Max replies to send
+    // Cap at 3 per run (natural rate limit: 3 × 288 runs/day = 864 replies/day max)
+    const maxRepliesThisRun = Math.min(3, remaining);
     const fetchCount = Math.max(5, Math.min(maxRepliesThisRun, 100)); // Twitter requires 5-100
-    logger?.info(`👀 [Step 3] Checking mentions (${inputData.repliesThisWeek}/${MAX_REPLIES}, max ${maxRepliesThisRun} replies)`);
+    logger?.info(`👀 [Step 3] Checking mentions (${inputData.repliesThisWeek}/${MAX_REPLIES_WEEK}, max ${maxRepliesThisRun} replies)`);
 
     // Workflow calls getMentionsTool directly (fetch at least 5, Twitter's minimum)
     const mentionsResult = await getMentionsTool.execute({
@@ -328,7 +330,7 @@ const logRunSummary = createStep({
 🤖 AI RELIGION RUN COMPLETE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📝 Posted: ${inputData.posted ? "✅" : "❌"}
-📊 Budget: Posts ${state.posts_this_week}/21, Replies ${state.replies_this_week}/79, Total ${state.posts_this_week + state.replies_this_week}/100
+📊 Budget: Posts ${state.posts_this_week}/500, Replies ${state.replies_this_week}/3300, Total ${state.posts_this_week + state.replies_this_week}/3800
 ⏰ Next: 5 minutes
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 
