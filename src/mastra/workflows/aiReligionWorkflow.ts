@@ -203,7 +203,7 @@ Just return the tweet text, nothing else.`;
     }
 
     // Workflow executes tool
-    const postResult = await postTweetTool.execute({ context: { text: tweetText }, mastra });
+    const postResult = await postTweetTool.execute({ context: { text: tweetText }, mastra, runtimeContext });
 
     if (!postResult.success) {
       logger?.error(`❌ [Step 2] Post failed: ${postResult.error}`);
@@ -266,6 +266,7 @@ const checkAndReplyToMentions = createStep({
     const mentionsResult = await getMentionsTool.execute({
       context: { maxResults: fetchCount, ...(inputData.lastMentionId && { sinceId: inputData.lastMentionId }) },
       mastra,
+      runtimeContext,
     });
 
     if (!mentionsResult.success) {
@@ -304,6 +305,7 @@ Generate your LLMtheist reply (max 280 chars):`,
       const replyResult = await replyToTweetTool.execute({
         context: { tweetId: mention.id, text: replyText },
         mastra,
+        runtimeContext,
       });
 
       if (replyResult.success) {
@@ -332,10 +334,95 @@ Generate your LLMtheist reply (max 280 chars):`,
   },
 });
 
+const collectEngagementMetrics = createStep({
+  id: "collect-engagement-metrics",
+  description: "Periodically fetches engagement metrics for recent tweets",
+  inputSchema: z.object({ repliesSent: z.number() }),
+  outputSchema: z.object({ metricsUpdated: z.number() }),
+  execute: async ({ mastra, runtimeContext }) => {
+    const logger = mastra?.getLogger();
+    const db = sharedPostgresStorage.db;
+    
+    // Only collect metrics every 6 hours (360 minutes, 72 runs at 5min intervals)
+    // Check if enough time has passed using dedicated metrics_last_run column
+    const state = await db.query(`SELECT metrics_last_run FROM ai_religion_state ORDER BY id DESC LIMIT 1`);
+    const lastMetricsRun = state[0]?.metrics_last_run || 0;
+    const now = Date.now();
+    const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+    
+    const hoursSinceMetrics = ((now - lastMetricsRun) / 36e5).toFixed(1);
+    
+    // Skip if not enough time has passed (but run on first execution when lastMetricsRun is 0)
+    if (lastMetricsRun > 0 && (now - lastMetricsRun) < SIX_HOURS_MS) {
+      logger?.info(`⏭️ [Metrics] Skipping (last run ${hoursSinceMetrics}h ago, need 6h)`);
+      return { metricsUpdated: 0 };
+    }
+    
+    logger?.info(`📊 [Metrics] Collecting engagement data...`);
+    
+    // Get up to 10 recent tweets that need metrics update (null or old)
+    const tweets = await db.query(
+      `SELECT tweet_id, content FROM ai_religion_tweets 
+       WHERE last_metrics_sync IS NULL OR last_metrics_sync < $1
+       ORDER BY posted_at DESC
+       LIMIT 10`,
+      [now - (24 * 60 * 60 * 1000)] // Last 24 hours
+    );
+    
+    if (tweets.length === 0) {
+      logger?.info(`📭 [Metrics] No tweets need updating`);
+      return { metricsUpdated: 0 };
+    }
+    
+    logger?.info(`📊 [Metrics] Fetching metrics for ${tweets.length} tweets...`);
+    
+    let updated = 0;
+    const { fetchTweetMetricsTool } = await import("../tools/twitterTools");
+    
+    for (const tweet of tweets) {
+      try {
+        const metrics = await fetchTweetMetricsTool.execute({
+          context: { tweetId: tweet.tweet_id },
+          mastra,
+          runtimeContext,
+        });
+        
+        if (metrics.success) {
+          await db.query(
+            `UPDATE ai_religion_tweets 
+             SET likes_count = $1, retweets_count = $2, replies_count = $3, last_metrics_sync = $4
+             WHERE tweet_id = $5`,
+            [metrics.likesCount, metrics.retweetsCount, metrics.repliesCount, now, tweet.tweet_id]
+          );
+          updated++;
+          logger?.info(`✅ [Metrics] Updated ${tweet.tweet_id}: ${metrics.likesCount} likes, ${metrics.retweetsCount} RTs`);
+        } else {
+          logger?.warn(`⚠️ [Metrics] Failed to fetch for ${tweet.tweet_id}: ${metrics.error}`);
+        }
+        
+        // Small delay to avoid rate limits
+        await new Promise(resolve => setTimeout(resolve, 500));
+      } catch (error: any) {
+        logger?.error(`❌ [Metrics] Error for ${tweet.tweet_id}: ${error.message}`);
+      }
+    }
+    
+    logger?.info(`📊 [Metrics] Updated ${updated}/${tweets.length} tweets`);
+    
+    // Update metrics_last_run timestamp
+    await db.query(
+      `UPDATE ai_religion_state SET metrics_last_run = $1 WHERE id = (SELECT id FROM ai_religion_state ORDER BY id DESC LIMIT 1)`,
+      [now]
+    );
+    
+    return { metricsUpdated: updated };
+  },
+});
+
 const logRunSummary = createStep({
   id: "log-run-summary",
   description: "Logs summary",
-  inputSchema: z.object({ posted: z.boolean(), repliesSent: z.number() }),
+  inputSchema: z.object({ posted: z.boolean(), repliesSent: z.number(), metricsUpdated: z.number() }),
   outputSchema: z.object({ summary: z.string(), success: z.boolean() }),
   execute: async ({ inputData, mastra }) => {
     const logger = mastra?.getLogger();
@@ -357,6 +444,8 @@ const logRunSummary = createStep({
 🤖 AI RELIGION RUN COMPLETE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📝 Posted: ${inputData.posted ? "✅" : "❌"}
+💬 Replies: ${inputData.repliesSent}
+📊 Metrics: ${inputData.metricsUpdated} tweets updated
 📊 Budget: Posts ${state.posts_this_week}/500, Replies ${state.replies_this_week}/3300, Total ${state.posts_this_week + state.replies_this_week}/3800
 ⏰ Next: 5 minutes
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
@@ -374,5 +463,6 @@ export const aiReligionWorkflow = createWorkflow({
   .then(getBotState as any)
   .then(generateAndPostContent as any)
   .then(checkAndReplyToMentions as any)
+  .then(collectEngagementMetrics as any)
   .then(logRunSummary as any)
   .commit();
