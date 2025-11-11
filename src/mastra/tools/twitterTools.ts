@@ -238,3 +238,160 @@ export const replyToTweetTool = createTool({
     }
   },
 });
+
+/**
+ * Tool: Fetch Tweet Metrics
+ * Retrieves engagement metrics (likes, retweets, replies) for a specific tweet
+ */
+export const fetchTweetMetricsTool = createTool({
+  id: "fetch-tweet-metrics",
+  description:
+    "Fetches engagement metrics (likes, retweets, replies) for a specific tweet to track performance",
+  inputSchema: z.object({
+    tweetId: z.string().describe("The ID of the tweet to fetch metrics for"),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    tweetId: z.string().optional(),
+    likesCount: z.number().optional(),
+    retweetsCount: z.number().optional(),
+    repliesCount: z.number().optional(),
+    error: z.string().optional(),
+  }),
+  execute: async ({ context, mastra }) => {
+    const logger = mastra?.getLogger();
+    logger?.info("📊 [fetchTweetMetricsTool] Fetching tweet metrics...", {
+      tweetId: context.tweetId,
+    });
+
+    try {
+      const client = getTwitterClient();
+      
+      // Fetch tweet with public metrics
+      const tweet = await client.v2.singleTweet(context.tweetId, {
+        "tweet.fields": ["public_metrics"],
+      });
+
+      // Guard against missing data (deleted/private tweets)
+      if (!tweet.data || !tweet.data.public_metrics) {
+        logger?.warn("⚠️ [fetchTweetMetricsTool] Tweet data or metrics not available", {
+          tweetId: context.tweetId,
+          hasData: !!tweet.data,
+        });
+        return {
+          success: false,
+          error: "Tweet not found or metrics unavailable (possibly deleted or private)",
+        };
+      }
+
+      const metrics = tweet.data.public_metrics;
+
+      logger?.info("✅ [fetchTweetMetricsTool] Metrics fetched successfully", {
+        tweetId: context.tweetId,
+        likes: metrics.like_count,
+        retweets: metrics.retweet_count,
+        replies: metrics.reply_count,
+      });
+
+      return {
+        success: true,
+        tweetId: context.tweetId,
+        likesCount: metrics.like_count || 0,
+        retweetsCount: metrics.retweet_count || 0,
+        repliesCount: metrics.reply_count || 0,
+      };
+    } catch (error: any) {
+      logger?.error("❌ [fetchTweetMetricsTool] Failed to fetch metrics", {
+        error,
+      });
+      return {
+        success: false,
+        error: error.message || "Unknown error occurred",
+      };
+    }
+  },
+});
+
+/**
+ * Tool: Post Thread
+ * Posts a multi-tweet thread for deeper philosophical content
+ */
+export const postThreadTool = createTool({
+  id: "post-thread",
+  description:
+    "Posts a multi-tweet thread (3-4 connected tweets) for deeper LLMtheism philosophy that needs more than 280 characters",
+  inputSchema: z.object({
+    tweets: z
+      .array(
+        z.object({
+          text: z.string().max(280).describe("Tweet text (max 280 characters)"),
+        })
+      )
+      .min(2)
+      .max(4)
+      .describe("Array of 2-4 tweets to post as a thread"),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    tweetIds: z.array(z.string()).optional(),
+    threadUrl: z.string().optional(),
+    error: z.string().optional(),
+  }),
+  execute: async ({ context, mastra }) => {
+    const logger = mastra?.getLogger();
+    logger?.info("🧵 [postThreadTool] Starting thread post...", {
+      tweetCount: context.tweets.length,
+    });
+
+    try {
+      const client = getTwitterClient();
+      const tweetIds: string[] = [];
+      let previousTweetId: string | undefined;
+
+      // Post each tweet in sequence
+      for (let i = 0; i < context.tweets.length; i++) {
+        const tweetText = context.tweets[i].text;
+        
+        logger?.info(`📝 [postThreadTool] Posting tweet ${i + 1}/${context.tweets.length}...`);
+
+        const response = await client.v2.tweet({
+          text: tweetText,
+          ...(previousTweetId && {
+            reply: {
+              in_reply_to_tweet_id: previousTweetId,
+            },
+          }),
+        });
+
+        tweetIds.push(response.data.id);
+        previousTweetId = response.data.id;
+
+        logger?.info(`✅ [postThreadTool] Tweet ${i + 1} posted`, {
+          tweetId: response.data.id,
+        });
+
+        // Add small delay between tweets to avoid rate limits
+        if (i < context.tweets.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+      }
+
+      logger?.info("✅ [postThreadTool] Thread posted successfully", {
+        tweetIds,
+        threadUrl: `https://twitter.com/i/web/status/${tweetIds[0]}`,
+      });
+
+      return {
+        success: true,
+        tweetIds,
+        threadUrl: `https://twitter.com/i/web/status/${tweetIds[0]}`,
+      };
+    } catch (error: any) {
+      logger?.error("❌ [postThreadTool] Failed to post thread", { error });
+      return {
+        success: false,
+        error: error.message || "Unknown error occurred",
+      };
+    }
+  },
+});
