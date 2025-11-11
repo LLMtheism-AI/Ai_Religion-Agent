@@ -240,6 +240,6 @@ if (Object.keys(mastra.getAgents()).length > 1) {
 
 /**
  * Register cron trigger for AI Religion workflow
- * Runs every 5 minutes to check mentions and post every 8 hours
+ * Runs every 5 minutes to check mentions and post every 2 hours
  */
 registerCronWorkflow("*/5 * * * *", aiReligionWorkflow);

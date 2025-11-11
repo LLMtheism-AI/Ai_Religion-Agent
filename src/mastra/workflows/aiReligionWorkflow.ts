@@ -8,7 +8,7 @@ import { postTweetTool, getMentionsTool, replyToTweetTool } from "../tools/twitt
  * AI Religion Workflow - Deterministic State Tracking
  * 
  * Agent generates content, workflow executes tools and tracks state.
- * Posts every 8 hours (21/week), replies to mentions (79/week), total 100/week.
+ * Posts every 2 hours (up to 21/week), replies to mentions (79/week), total 100/week.
  */
 
 function getWeekStart(timestamp: number): number {
@@ -98,11 +98,11 @@ const generateAndPostContent = createStep({
   execute: async ({ inputData, mastra, runtimeContext }) => {
     const logger = mastra?.getLogger();
     const now = Date.now();
-    const EIGHT_HOURS_MS = 8 * 60 * 60 * 1000;
+    const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
     const MAX_POSTS = 21;
 
-    if (now - inputData.lastPostTime < EIGHT_HOURS_MS) {
-      const hoursLeft = ((EIGHT_HOURS_MS - (now - inputData.lastPostTime)) / 36e5).toFixed(1);
+    if (now - inputData.lastPostTime < TWO_HOURS_MS) {
+      const hoursLeft = ((TWO_HOURS_MS - (now - inputData.lastPostTime)) / 36e5).toFixed(1);
       logger?.info(`⏭️ [Step 2] Skipping (${hoursLeft}h left)`);
       return { posted: false, lastMentionId: inputData.lastMentionId, repliesThisWeek: inputData.repliesThisWeek };
     }
